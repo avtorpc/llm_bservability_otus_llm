@@ -15,6 +15,13 @@ const clock = new Intl.DateTimeFormat('ru-RU', {timeStyle: 'medium'});
 let eventCount = 0;
 let reviewCount = 0;
 let revisionLimit = 0;
+let modelCalls = [];
+
+function formatDuration(milliseconds) {
+  if (milliseconds == null) return '—';
+  if (milliseconds >= 1000) return `${timing.format(milliseconds / 1000)} с`;
+  return `${timing.format(milliseconds)} мс`;
+}
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -54,7 +61,7 @@ function showPhase(role, phase) {
   board.querySelector(`[data-role="${role}"]`).dataset.active = String(phase === 'active');
 }
 
-function addLog(role, description, duration) {
+function addLog(role, description, duration, call) {
   byId('empty-log')?.remove();
   const row = element('tr');
   const roleCell = element('td');
@@ -68,12 +75,30 @@ function addLog(role, description, duration) {
   } else {
     roleCell.textContent = 'Граф';
   }
-  row.append(
-    element('td', clock.format(new Date())), roleCell, element('td', description),
-    element('td', duration === undefined ? '—' : `${timing.format(duration)} мс`),
-  );
+  const detail = element('td', description);
+  if (call?.generation_ms != null) {
+    detail.append(element('small', `Загрузка ${formatDuration(call.load_ms)} · Промпт ${formatDuration(call.prompt_ms)} · Генерация ${formatDuration(call.generation_ms)}`, 'call-timing'));
+  }
+  const tokens = call ? `${call.input_tokens ?? '—'} / ${call.output_tokens ?? '—'}` : '—';
+  row.append(element('td', clock.format(new Date())), roleCell, detail,
+    element('td', formatDuration(duration)), element('td', tokens));
   byId('events').append(row);
   byId('event-count').textContent = `События · ${++eventCount}`;
+}
+
+function addCalls(role, calls) {
+  modelCalls.push(...calls);
+  for (const call of calls) {
+    addLog(role, call.error ? `${call.model} · ${call.error}` : `Вызов ${call.model}`, call.duration_ms, call);
+  }
+  function total(field) {
+    const reported = modelCalls.filter((call) => Number.isInteger(call[field]));
+    if (!reported.length) return '—';
+    const tokens = reported.reduce((sum, call) => sum + call[field], 0);
+    return `${reported.length < modelCalls.length ? '≥ ' : ''}${timing.format(tokens)}`;
+  }
+  byId('call-count').textContent = modelCalls.length;
+  byId('tokens').textContent = `${total('input_tokens')} / ${total('output_tokens')}`;
 }
 
 function item(title, text, subtitle) {
@@ -151,7 +176,9 @@ function renderStep(role, output) {
         showPhase(role, 'review');
         const route = byId('revision-route');
         route.hidden = false;
-        if (reviewCount <= revisionLimit) {
+        if (output.revision_unchanged) {
+          route.textContent = 'Копирайтер повторил отклонённый текст. Требуется ручная доработка.';
+        } else if (reviewCount <= revisionLimit) {
           next = 'copywriter';
           route.textContent = `Редактор → Копирайтер · возврат ${reviewCount} из ${revisionLimit}`;
         } else {
@@ -165,6 +192,7 @@ function renderStep(role, output) {
       description = `Подготовлено постов · ${output.ready.length}`;
       break;
   }
+  addCalls(role, output.calls);
   addLog(role, description, output.duration_ms);
   if (next) showPhase(next, 'active');
 }
@@ -172,6 +200,12 @@ function renderStep(role, output) {
 function handleEvent(event) {
   if (event.type === 'start') {
     revisionLimit = event.input.max_revisions;
+    const traceLink = byId('trace-link');
+    if (event.trace_url) {
+      traceLink.href = event.trace_url;
+      traceLink.hidden = false;
+    }
+    byId('model-label').textContent = `Локальная модель · ${event.model}`;
     byId('input-preview').textContent = JSON.stringify(event.input, null, 2);
     byId('show-input').disabled = false;
     showPhase('task', 'done');
@@ -179,12 +213,20 @@ function handleEvent(event) {
     addLog(null, 'Входные данные приняты');
   } else if (event.type === 'step') {
     renderStep(event.role, event.output);
+  } else if (event.type === 'error') {
+    addCalls(event.role, event.calls);
+    showPhase(event.role, 'review');
+    byId('elapsed').textContent = formatDuration(event.elapsed_ms);
+    showError(`${roles[event.role]}: ${event.message}`);
+    addLog(event.role, 'Запуск прерван', event.elapsed_ms);
+    return true;
   } else if (event.type === 'finish') {
     const status = event.status === 'completed' ? 'Завершено' : 'Требуется доработка';
     byId('run-status').textContent = status;
-    byId('elapsed').textContent = `${timing.format(event.elapsed_ms)} мс`;
+    byId('elapsed').textContent = formatDuration(event.elapsed_ms);
     byId('revisions').textContent = event.revisions;
-    addLog(null, status, event.elapsed_ms);
+    const message = event.status === 'no_progress' ? 'Остановка · текст после правок не изменился' : status;
+    addLog(null, message, event.elapsed_ms);
     return true;
   }
   return false;
@@ -245,11 +287,15 @@ form.addEventListener('submit', async (event) => {
   byId('show-input').disabled = true;
   eventCount = 0;
   reviewCount = 0;
+  modelCalls = [];
   byId('events').replaceChildren();
   byId('event-count').textContent = '0 событий';
   byId('revision-route').hidden = true;
   byId('elapsed').textContent = '—';
   byId('revisions').textContent = '0';
+  byId('call-count').textContent = '0';
+  byId('tokens').textContent = '—';
+  byId('trace-link').hidden = true;
   for (const role of Object.keys(roles)) {
     byId(`${role}-output`).innerHTML = emptyOutputs[role];
     showPhase(role, 'waiting');
@@ -270,22 +316,22 @@ form.addEventListener('submit', async (event) => {
 });
 
 try {
-  const response = await fetch('/api/defaults');
-  if (!response.ok) throw new Error();
-  const defaults = await response.json();
+  const defaults = JSON.parse(byId('default-task').textContent);
+  for (const field of ['topic', 'brief', 'days', 'post_count', 'max_revisions']) {
+    form.elements.namedItem(field).value = defaults[field];
+  }
   for (const [role, name] of Object.entries(roles)) {
     const label = element('label', name);
     const input = element('textarea');
     input.name = role;
-    input.value = defaults[role];
+    input.value = defaults.roles[role];
     input.rows = 3;
     input.required = true;
     input.maxLength = 4000;
     label.append(input);
     byId('role-settings').append(label);
   }
-  byId('role-settings').append(element('p', 'Инструкции передаются в граф. В деморежиме шаги возвращают тестовые результаты.', 'empty'));
   byId('run').disabled = false;
 } catch {
-  showError('Не удалось загрузить инструкции ролей. Обнови страницу.');
+  showError('Не удалось заполнить стартовое задание.');
 }

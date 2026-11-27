@@ -1,0 +1,128 @@
+# Local tracing services based on the Langfuse v4 Docker Compose deployment.
+x-langfuse-env: &langfuse-env
+  NEXTAUTH_URL: http://127.0.0.1:3000
+  DATABASE_URL: postgresql://langfuse:${LF_POSTGRES_PASSWORD:?run scripts/init_langfuse.py}@langfuse-db:5432/langfuse
+  SALT: ${LF_SALT:?run scripts/init_langfuse.py}
+  ENCRYPTION_KEY: ${LF_ENCRYPTION_KEY:?run scripts/init_langfuse.py}
+  TELEMETRY_ENABLED: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+  CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+  CLICKHOUSE_USER: langfuse
+  CLICKHOUSE_PASSWORD: ${LF_CLICKHOUSE_PASSWORD:?run scripts/init_langfuse.py}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: langfuse-redis
+  REDIS_AUTH: ${LF_REDIS_PASSWORD:?run scripts/init_langfuse.py}
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LF_STORAGE_PASSWORD:?run scripts/init_langfuse.py}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-storage:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+
+x-langfuse-dependencies: &langfuse-dependencies
+  langfuse-db: {condition: service_healthy}
+  langfuse-clickhouse: {condition: service_healthy}
+  langfuse-redis: {condition: service_healthy}
+  langfuse-storage: {condition: service_healthy}
+
+services:
+  python:
+    environment:
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+      LANGFUSE_UI_URL: http://127.0.0.1:3000
+      LANGFUSE_PROJECT_ID: ai-smm
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?run scripts/init_langfuse.py}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?run scripts/init_langfuse.py}
+    depends_on:
+      langfuse-web: {condition: service_healthy}
+
+  langfuse-web:
+    image: ghcr.io/langfuse/langfuse:4.78
+    depends_on: *langfuse-dependencies
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_SECRET: ${LF_NEXTAUTH_SECRET:?run scripts/init_langfuse.py}
+      LANGFUSE_INIT_ORG_ID: llm-observability
+      LANGFUSE_INIT_ORG_NAME: LLM Observability
+      LANGFUSE_INIT_PROJECT_ID: ai-smm
+      LANGFUSE_INIT_PROJECT_NAME: AI SMM
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?run scripts/init_langfuse.py}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?run scripts/init_langfuse.py}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:?run scripts/init_langfuse.py}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:?run scripts/init_langfuse.py}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://langfuse-web:3000/api/public/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      start_period: 3m
+      retries: 6
+
+  langfuse-worker:
+    image: ghcr.io/langfuse/langfuse-worker:4.78
+    depends_on: *langfuse-dependencies
+    environment: *langfuse-env
+
+  langfuse-db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_DB: langfuse
+      POSTGRES_PASSWORD: ${LF_POSTGRES_PASSWORD:?run scripts/init_langfuse.py}
+    volumes:
+      - langfuse_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "langfuse", "-d", "langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:26.3.62.3
+    user: "101:101"
+    environment:
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${LF_CLICKHOUSE_PASSWORD:?run scripts/init_langfuse.py}
+    volumes:
+      - langfuse_clickhouse:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  langfuse-redis:
+    image: redis:7.2
+    environment:
+      REDISCLI_AUTH: ${LF_REDIS_PASSWORD:?run scripts/init_langfuse.py}
+    command: ["redis-server", "--requirepass", "${LF_REDIS_PASSWORD:?run scripts/init_langfuse.py}", "--maxmemory-policy", "noeviction", "--appendonly", "yes"]
+    volumes:
+      - langfuse_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  langfuse-storage:
+    image: ghcr.io/versity/versitygw:v1.7.0
+    entrypoint: ["sh", "-ec"]
+    command: ["mkdir -p /data/langfuse && exec versitygw --port :9000 --region us-east-1 --health /health posix /data"]
+    environment:
+      ROOT_ACCESS_KEY: langfuse
+      ROOT_SECRET_KEY: ${LF_STORAGE_PASSWORD:?run scripts/init_langfuse.py}
+    volumes:
+      - langfuse_objects:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  langfuse_postgres:
+  langfuse_clickhouse:
+  langfuse_redis:
+  langfuse_objects:

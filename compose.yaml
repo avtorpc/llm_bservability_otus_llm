@@ -21,6 +21,9 @@ services:
   python:
     build: .
     init: true
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: qwen3:4b
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:

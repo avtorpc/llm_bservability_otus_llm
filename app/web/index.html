@@ -4,13 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI SMM-отдел</title>
-  <link rel="stylesheet" href="/static/dashboard.css?v=2">
-  <script type="module" src="/static/dashboard.js?v=2"></script>
+  <link rel="stylesheet" href="/static/dashboard.css?v=3">
+  <script type="application/json" id="default-task">__DEFAULT_TASK__</script>
+  <script type="module" src="/static/dashboard.js?v=6"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="brand"><span class="brand-icon" aria-hidden="true">✦</span> AI SMM-отдел</div>
-    <span class="demo-label">Демонстрационный режим</span>
+    <span class="demo-label" id="model-label">Локальная модель · Qwen3-4B</span>
   </header>
   <main>
     <div class="heading">
@@ -38,12 +39,12 @@
         <header><span class="panel-icon" aria-hidden="true">≡</span><h2>Задача</h2><button type="button" class="expand" data-panel="task" aria-label="Развернуть колонку Задача" aria-expanded="false">⤢</button></header>
         <div class="panel-body">
           <form id="task-form">
-            <label>Тема <input name="topic" maxlength="100" required value="Сливочный раф в кофейне «Зерно»"></label>
-            <label>Бриф <textarea name="brief" rows="5" minlength="5" maxlength="8000" required>Московская кофейня «Зерно» приглашает жителей района попробовать сезонный сливочный раф. Тон живой и спокойный. Используй подтверждённые факты, без вымышленных цен и адресов.</textarea></label>
+            <label>Тема <input name="topic" maxlength="100" required></label>
+            <label>Бриф <textarea name="brief" rows="5" minlength="5" maxlength="8000" required></textarea></label>
             <div class="fields">
-              <label>Дни <input type="number" name="days" min="1" max="14" value="7" required></label>
-              <label>Посты <input type="number" name="post_count" min="1" max="7" value="3" required></label>
-              <label>Возвраты <input type="number" name="max_revisions" min="0" max="5" value="3" required></label>
+              <label>Дни <input type="number" name="days" min="1" max="14" required></label>
+              <label>Посты <input type="number" name="post_count" min="1" max="7" required></label>
+              <label>Возвраты <input type="number" name="max_revisions" min="0" max="5" required></label>
             </div>
             <details class="control-details"><summary>Инструкции ролей</summary><div id="role-settings"></div></details>
             <button id="show-input" class="text-button" type="button" disabled>Входные данные запуска</button>
@@ -75,14 +76,15 @@
     <details class="metrics" open>
       <summary><span>Журнал и метрики</span><span id="event-count">0 событий</span></summary>
       <div class="metrics-content">
+        <p><a id="trace-link" class="text-button" target="_blank" rel="noopener" hidden>Открыть trace в Langfuse</a></p>
         <dl class="totals">
           <div><dt>Общее время</dt><dd id="elapsed">—</dd></div>
           <div><dt>Возвраты</dt><dd id="revisions">0</dd></div>
-          <div><dt>Вызовы модели</dt><dd>0</dd></div>
-          <div><dt>Токены</dt><dd>—</dd></div>
+          <div><dt>Вызовы модели</dt><dd id="call-count">0</dd></div>
+          <div><dt>Токены · вход / выход</dt><dd id="tokens">—</dd></div>
         </dl>
-        <div class="log-scroll"><table><thead><tr><th scope="col">Время</th><th scope="col">Этап</th><th scope="col">Событие</th><th scope="col">Длительность</th></tr></thead>
-          <tbody id="events"><tr id="empty-log"><td colspan="4">Запусти граф, чтобы увидеть журнал.</td></tr></tbody>
+        <div class="log-scroll"><table><thead><tr><th scope="col">Время</th><th scope="col">Этап</th><th scope="col">Событие</th><th scope="col">Длительность</th><th scope="col">Токены · вход / выход</th></tr></thead>
+          <tbody id="events"><tr id="empty-log"><td colspan="5">Запусти граф, чтобы увидеть журнал.</td></tr></tbody>
         </table></div>
       </div>
     </details>
@@ -95,6 +97,7 @@
       <li><strong>Принято</strong> → Паблишер оформляет посты для VK.</li>
       <li><strong>Не принято</strong> → Копирайтер получает обязательные правки и передаёт новую версию Редактору.</li>
       <li><strong>Лимит возвратов исчерпан</strong> → запуск завершается с черновиками и правками.</li>
+      <li><strong>Копирайтер повторил отклонённый текст</strong> → запуск завершается с последними правками редактора.</li>
     </ul>
   </dialog>
   <dialog id="input-dialog">

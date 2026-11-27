@@ -112,6 +112,7 @@ summary { cursor: pointer; }
 table { width: 100%; border-collapse: collapse; font-size: .88rem; }
 th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 7px 8px; }
 th { color: var(--muted); font-weight: 650; }
+.call-timing { display: block; color: var(--muted); margin-top: 2px; }
 #empty-log { color: var(--muted); }
 dialog { max-width: min(650px, calc(100% - 30px)); border: 1px solid var(--line); border-radius: 12px; padding: 20px; color: inherit; }
 dialog::backdrop { background: #1c213099; }
